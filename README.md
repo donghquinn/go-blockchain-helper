@@ -16,7 +16,7 @@ A comprehensive Go library for Ethereum and Web3 development without external de
 ## Installation
 
 ```bash
-go get github.com/kimdonghyun/go-blockchain-helper
+go get github.com/donghquinn/go-blockchain-helper
 ```
 
 ## Quick Start
@@ -29,7 +29,7 @@ package main
 import (
     "fmt"
     "math/big"
-    "github.com/kimdonghyun/go-blockchain-helper/pkg/web3"
+    "github.com/donghquinn/go-blockchain-helper/pkg/web3"
 )
 
 func main() {
@@ -57,7 +57,7 @@ package main
 import (
     "fmt"
     "math/big"
-    "github.com/kimdonghyun/go-blockchain-helper/pkg/web3"
+    "github.com/donghquinn/go-blockchain-helper/pkg/web3"
 )
 
 func main() {
@@ -91,7 +91,7 @@ package main
 import (
     "fmt"
     "math/big"
-    "github.com/kimdonghyun/go-blockchain-helper/pkg/web3"
+    "github.com/donghquinn/go-blockchain-helper/pkg/web3"
 )
 
 func main() {
@@ -132,7 +132,7 @@ package main
 import (
     "fmt"
     "math/big"
-    "github.com/kimdonghyun/go-blockchain-helper/pkg/web3"
+    "github.com/donghquinn/go-blockchain-helper/pkg/web3"
 )
 
 func main() {
@@ -171,7 +171,7 @@ package main
 import (
     "fmt"
     "math/big"
-    "github.com/kimdonghyun/go-blockchain-helper/pkg/web3"
+    "github.com/donghquinn/go-blockchain-helper/pkg/web3"
 )
 
 func main() {
@@ -225,7 +225,7 @@ package main
 import (
     "fmt"
     "math/big"
-    "github.com/kimdonghyun/go-blockchain-helper/pkg/web3"
+    "github.com/donghquinn/go-blockchain-helper/pkg/web3"
 )
 
 func main() {
@@ -345,4 +345,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 If you find this library useful, please consider starring the repository and sharing it with others!
 
-For questions, issues, or contributions, please visit our [GitHub repository](https://github.com/kimdonghyun/go-blockchain-helper).
+For questions, issues, or contributions, please visit our [GitHub repository](https://github.com/donghquinn/go-blockchain-helper).
