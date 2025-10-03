@@ -1,3 +1,3 @@
-module org.donghyuns.com/blockchain/helper
+module github.com/kimdonghyun/go-blockchain-helper
 
-go 1.25.1
+go 1.21
