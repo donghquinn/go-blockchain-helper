@@ -1,3 +1,3 @@
-module github.com/kimdonghyun/go-blockchain-helper
+module org.donghyuns.com/go-blockchain-helper
 
 go 1.21
