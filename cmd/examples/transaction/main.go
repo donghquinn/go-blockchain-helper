@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"math/big"
 
-	"github.com/kimdonghyun/go-blockchain-helper/pkg/web3"
+	"github.com/donghquinn/go-blockchain-helper/pkg/web3"
 )
 
 func main() {
@@ -38,7 +38,7 @@ func main() {
 
 	// Contract interaction transaction
 	fmt.Println("\n--- Contract Interaction Transaction ---")
-	
+
 	// Create some sample contract call data (ERC-20 transfer)
 	contractData := []byte{
 		0xa9, 0x05, 0x9c, 0xbb, // transfer(address,uint256) selector
@@ -58,7 +58,7 @@ func main() {
 
 	// Gas estimation examples
 	fmt.Println("\n--- Gas Estimation ---")
-	
+
 	// Simple ETH transfer
 	gasETH, err := web3.EstimateGas(to, from, "", value)
 	if err != nil {
@@ -77,20 +77,20 @@ func main() {
 
 	// Private key and address generation
 	fmt.Println("\n--- Private Key & Address Generation ---")
-	
+
 	privateKey := web3.GenerateRandomPrivateKey()
 	fmt.Printf("Generated Private Key: %s\n", privateKey)
-	
+
 	if web3.ValidatePrivateKey(privateKey) {
 		fmt.Println("Private key is valid")
-		
+
 		address, err := web3.PrivateKeyToAddress(privateKey)
 		if err != nil {
 			fmt.Printf("Error deriving address: %v\n", err)
 		} else {
 			fmt.Printf("Derived Address: %s\n", address)
 		}
-		
+
 		// Derive public key
 		pubKey, err := web3.PrivateKeyToPublicKey(privateKey)
 		if err != nil {
@@ -116,7 +116,7 @@ func main() {
 		Data:     []byte{},
 		Nonce:    42,
 	}
-	
+
 	fmt.Printf("Custom Transaction:\n")
 	fmt.Printf("  Gas Limit: %d\n", customTx.Gas)
 	fmt.Printf("  Gas Price: %s Gwei\n", web3.FormatGwei(customTx.GasPrice, 2))

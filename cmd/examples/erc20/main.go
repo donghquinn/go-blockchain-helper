@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"math/big"
 
-	"github.com/kimdonghyun/go-blockchain-helper/pkg/web3"
+	"github.com/donghquinn/go-blockchain-helper/pkg/web3"
 )
 
 func main() {
