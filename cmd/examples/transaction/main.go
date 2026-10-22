@@ -14,7 +14,7 @@ func main() {
 
 	// Example addresses
 	to := "0x742d35Cc6634C0532925a3b8D82C28d53e01BCf2"
-	from := "0x8ba1f109551bD432803012645Hac136c63F5E5"
+	from := "0x8ba1f109551bD432803012645Ac136ddd64DBA72"
 
 	// Validate addresses
 	fmt.Println("\n--- Address Validation ---")

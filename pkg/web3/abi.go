@@ -1,6 +1,7 @@
 package web3
 
 import (
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"math/big"
@@ -25,72 +26,84 @@ type ABIEvent struct {
 	Inputs []ABIParam
 }
 
+var abiSignatureRegexp = regexp.MustCompile(`^(\w+)\((.*)\)$`)
+
+var (
+	two256    = new(big.Int).Lsh(big.NewInt(1), 256)
+	maxInt256 = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 255), big.NewInt(1))
+	minInt256 = new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 255))
+)
+
 func EncodeFunctionCall(funcName string, params []ABIParam, values []interface{}) ([]byte, error) {
 	signature := createFunctionSignature(funcName, params)
-	selector := Keccak256([]byte(signature))[:8]
 
-	selectorBytes, err := hex.DecodeString(selector)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode selector: %w", err)
+	types := make([]string, len(params))
+	for i, param := range params {
+		types[i] = param.Type
 	}
 
-	encodedParams, err := encodeParameters(params, values)
+	encodedParams, err := encodeTuple(types, values)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode parameters: %w", err)
 	}
 
-	return append(selectorBytes, encodedParams...), nil
+	data := make([]byte, 4+len(encodedParams))
+	copy(data, keccak256([]byte(signature))[:4])
+	copy(data[4:], encodedParams)
+	return data, nil
 }
 
 func createFunctionSignature(funcName string, params []ABIParam) string {
-	var paramTypes []string
-	for _, param := range params {
-		paramTypes = append(paramTypes, param.Type)
+	var sb strings.Builder
+	sb.WriteString(funcName)
+	sb.WriteByte('(')
+	for i, param := range params {
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		sb.WriteString(param.Type)
 	}
-	return funcName + "(" + strings.Join(paramTypes, ",") + ")"
+	sb.WriteByte(')')
+	return sb.String()
 }
 
-func encodeParameters(params []ABIParam, values []interface{}) ([]byte, error) {
-	if len(params) != len(values) {
-		return nil, fmt.Errorf("parameter count mismatch: expected %d, got %d", len(params), len(values))
+// encodeTuple ABI-encodes values as a tuple: a head of one 32-byte word per
+// element (the value itself, or an offset for dynamic types) followed by the
+// dynamic tails.
+func encodeTuple(types []string, values []interface{}) ([]byte, error) {
+	if len(types) != len(values) {
+		return nil, fmt.Errorf("parameter count mismatch: expected %d, got %d", len(types), len(values))
 	}
 
-	var encoded []byte
-	var dynamicData []byte
-	dynamicOffset := len(params) * 32
+	headSize := len(types) * 32
+	encoded := make([]byte, headSize, headSize+64*len(types))
 
-	for i, param := range params {
-		value := values[i]
+	for i, abiType := range types {
+		value, err := encodeValue(abiType, values[i])
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode parameter %d: %w", i, err)
+		}
 
-		if isDynamicType(param.Type) {
-			offsetBytes := make([]byte, 32)
-			big.NewInt(int64(dynamicOffset)).FillBytes(offsetBytes)
-			encoded = append(encoded, offsetBytes...)
-
-			dynamicEncoded, err := encodeValue(param.Type, value)
-			if err != nil {
-				return nil, fmt.Errorf("failed to encode dynamic parameter %d: %w", i, err)
-			}
-			dynamicData = append(dynamicData, dynamicEncoded...)
-			dynamicOffset += len(dynamicEncoded)
+		head := encoded[i*32 : (i+1)*32]
+		if isDynamicType(abiType) {
+			putUint64(head, uint64(len(encoded)))
+			encoded = append(encoded, value...)
 		} else {
-			staticEncoded, err := encodeValue(param.Type, value)
-			if err != nil {
-				return nil, fmt.Errorf("failed to encode static parameter %d: %w", i, err)
-			}
-			encoded = append(encoded, staticEncoded...)
+			copy(head, value)
 		}
 	}
 
-	return append(encoded, dynamicData...), nil
+	return encoded, nil
 }
 
 func isDynamicType(abiType string) bool {
-	return strings.Contains(abiType, "[]") || abiType == "string" || abiType == "bytes"
+	return strings.HasSuffix(abiType, "[]") || abiType == "string" || abiType == "bytes"
 }
 
 func encodeValue(abiType string, value interface{}) ([]byte, error) {
 	switch {
+	case strings.HasSuffix(abiType, "[]"):
+		return encodeArray(abiType, value)
 	case abiType == "address":
 		return encodeAddress(value)
 	case strings.HasPrefix(abiType, "uint"):
@@ -103,61 +116,82 @@ func encodeValue(abiType string, value interface{}) ([]byte, error) {
 		return encodeString(value)
 	case abiType == "bytes":
 		return encodeBytes(value)
-	case strings.HasSuffix(abiType, "[]"):
-		return encodeArray(abiType, value)
 	default:
 		return nil, fmt.Errorf("unsupported type: %s", abiType)
 	}
 }
 
 func encodeAddress(value interface{}) ([]byte, error) {
-	var addressStr string
-	switch v := value.(type) {
-	case string:
-		addressStr = v
-	default:
+	addressStr, ok := value.(string)
+	if !ok {
 		return nil, fmt.Errorf("address must be string")
 	}
 
-	if !ValidateAddress(addressStr) {
+	address, ok := parseAddress(addressStr)
+	if !ok {
 		return nil, fmt.Errorf("invalid address format")
 	}
 
-	addressBytes, _ := hex.DecodeString(strings.TrimPrefix(addressStr, "0x"))
 	result := make([]byte, 32)
-	copy(result[12:], addressBytes)
+	putAddress(result, address)
 	return result, nil
 }
 
-func encodeUint(abiType string, value interface{}) ([]byte, error) {
-	var bigIntValue *big.Int
-
+func toBigInt(value interface{}) (*big.Int, error) {
 	switch v := value.(type) {
 	case *big.Int:
-		bigIntValue = v
-	case string:
-		var ok bool
-		bigIntValue, ok = new(big.Int).SetString(v, 10)
-		if !ok {
-			return nil, fmt.Errorf("invalid uint string")
+		if v == nil {
+			return nil, fmt.Errorf("nil integer value")
 		}
+		return v, nil
+	case string:
+		bigIntValue, ok := new(big.Int).SetString(v, 10)
+		if !ok {
+			return nil, fmt.Errorf("invalid integer string")
+		}
+		return bigIntValue, nil
 	case int:
-		bigIntValue = big.NewInt(int64(v))
+		return big.NewInt(int64(v)), nil
 	case int64:
-		bigIntValue = big.NewInt(v)
+		return big.NewInt(v), nil
 	case uint64:
-		bigIntValue = new(big.Int).SetUint64(v)
+		return new(big.Int).SetUint64(v), nil
 	default:
-		return nil, fmt.Errorf("unsupported uint type")
+		return nil, fmt.Errorf("unsupported integer type %T", value)
+	}
+}
+
+func encodeUint(abiType string, value interface{}) ([]byte, error) {
+	bigIntValue, err := toBigInt(value)
+	if err != nil {
+		return nil, err
 	}
 
 	result := make([]byte, 32)
-	bigIntValue.FillBytes(result)
+	if err := putUint256(result, bigIntValue); err != nil {
+		return nil, err
+	}
 	return result, nil
 }
 
 func encodeInt(abiType string, value interface{}) ([]byte, error) {
-	return encodeUint(abiType, value)
+	bigIntValue, err := toBigInt(value)
+	if err != nil {
+		return nil, err
+	}
+
+	if bigIntValue.Cmp(maxInt256) > 0 || bigIntValue.Cmp(minInt256) < 0 {
+		return nil, fmt.Errorf("value out of int256 range")
+	}
+
+	result := make([]byte, 32)
+	if bigIntValue.Sign() < 0 {
+		// Two's complement: 2^256 + v
+		new(big.Int).Add(two256, bigIntValue).FillBytes(result)
+	} else {
+		bigIntValue.FillBytes(result)
+	}
+	return result, nil
 }
 
 func encodeBool(value interface{}) ([]byte, error) {
@@ -183,21 +217,11 @@ func encodeBool(value interface{}) ([]byte, error) {
 }
 
 func encodeString(value interface{}) ([]byte, error) {
-	var str string
-	switch v := value.(type) {
-	case string:
-		str = v
-	default:
+	str, ok := value.(string)
+	if !ok {
 		return nil, fmt.Errorf("string value must be string type")
 	}
-
-	strBytes := []byte(str)
-	length := make([]byte, 32)
-	big.NewInt(int64(len(strBytes))).FillBytes(length)
-
-	paddedBytes := padBytes(strBytes, 32)
-
-	return append(length, paddedBytes...), nil
+	return encodeDynamicBytes([]byte(str)), nil
 }
 
 func encodeBytes(value interface{}) ([]byte, error) {
@@ -215,12 +239,20 @@ func encodeBytes(value interface{}) ([]byte, error) {
 		return nil, fmt.Errorf("bytes value must be []byte or hex string")
 	}
 
-	length := make([]byte, 32)
-	big.NewInt(int64(len(bytes))).FillBytes(length)
+	return encodeDynamicBytes(bytes), nil
+}
 
-	paddedBytes := padBytes(bytes, 32)
+// encodeDynamicBytes returns the length word followed by data right-padded to
+// a multiple of 32 bytes.
+func encodeDynamicBytes(data []byte) []byte {
+	result := make([]byte, 32+paddedLen(len(data)))
+	putUint64(result[:32], uint64(len(data)))
+	copy(result[32:], data)
+	return result
+}
 
-	return append(length, paddedBytes...), nil
+func paddedLen(n int) int {
+	return (n + 31) / 32 * 32
 }
 
 func encodeArray(abiType string, value interface{}) ([]byte, error) {
@@ -239,32 +271,20 @@ func encodeArray(abiType string, value interface{}) ([]byte, error) {
 		return nil, fmt.Errorf("array value must be slice")
 	}
 
-	length := make([]byte, 32)
-	big.NewInt(int64(len(elements))).FillBytes(length)
-
-	var encodedElements []byte
-	for _, element := range elements {
-		encoded, err := encodeValue(elementType, element)
-		if err != nil {
-			return nil, fmt.Errorf("failed to encode array element: %w", err)
-		}
-		encodedElements = append(encodedElements, encoded...)
+	types := make([]string, len(elements))
+	for i := range types {
+		types[i] = elementType
 	}
 
-	return append(length, encodedElements...), nil
-}
-
-func padBytes(data []byte, blockSize int) []byte {
-	remainder := len(data) % blockSize
-	if remainder == 0 {
-		return data
+	encodedElements, err := encodeTuple(types, elements)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode array element: %w", err)
 	}
 
-	padding := blockSize - remainder
-	padded := make([]byte, len(data)+padding)
-	copy(padded, data)
-
-	return padded
+	result := make([]byte, 32+len(encodedElements))
+	putUint64(result[:32], uint64(len(elements)))
+	copy(result[32:], encodedElements)
+	return result, nil
 }
 
 func DecodeFunctionResult(abiTypes []string, data []byte) ([]interface{}, error) {
@@ -272,7 +292,7 @@ func DecodeFunctionResult(abiTypes []string, data []byte) ([]interface{}, error)
 		return nil, fmt.Errorf("empty data")
 	}
 
-	var results []interface{}
+	results := make([]interface{}, 0, len(abiTypes))
 	offset := 0
 
 	for _, abiType := range abiTypes {
@@ -294,6 +314,8 @@ func DecodeFunctionResult(abiTypes []string, data []byte) ([]interface{}, error)
 
 func decodeValue(abiType string, data []byte, offset int) (interface{}, int, error) {
 	switch {
+	case strings.HasSuffix(abiType, "[]"):
+		return nil, 0, fmt.Errorf("unsupported decode type: %s", abiType)
 	case abiType == "address":
 		return decodeAddress(data, offset)
 	case strings.HasPrefix(abiType, "uint"):
@@ -312,9 +334,7 @@ func decodeAddress(data []byte, offset int) (string, int, error) {
 		return "", 0, fmt.Errorf("insufficient data for address")
 	}
 
-	addressBytes := data[offset+12 : offset+32]
-	address := "0x" + hex.EncodeToString(addressBytes)
-
+	address := "0x" + hex.EncodeToString(data[offset+12:offset+32])
 	return address, offset + 32, nil
 }
 
@@ -337,27 +357,43 @@ func decodeBool(data []byte, offset int) (bool, int, error) {
 }
 
 func decodeString(data []byte, offset int) (string, int, error) {
-	if offset+32 > len(data) {
-		return "", 0, fmt.Errorf("insufficient data for string offset")
+	stringOffset, err := readWordAsLength(data, offset, len(data))
+	if err != nil {
+		return "", 0, fmt.Errorf("invalid string offset: %w", err)
 	}
 
-	stringOffset := new(big.Int).SetBytes(data[offset : offset+32]).Int64()
-	if int(stringOffset)+32 > len(data) {
-		return "", 0, fmt.Errorf("insufficient data for string length")
+	length, err := readWordAsLength(data, stringOffset, len(data)-stringOffset-32)
+	if err != nil {
+		return "", 0, fmt.Errorf("invalid string length: %w", err)
 	}
 
-	length := new(big.Int).SetBytes(data[stringOffset : stringOffset+32]).Int64()
-	if int(stringOffset)+32+int(length) > len(data) {
-		return "", 0, fmt.Errorf("insufficient data for string content")
+	start := stringOffset + 32
+	return string(data[start : start+length]), offset + 32, nil
+}
+
+// readWordAsLength reads the 32-byte word at offset as a non-negative integer
+// no greater than limit, guarding against huge or malformed values.
+func readWordAsLength(data []byte, offset, limit int) (int, error) {
+	if offset < 0 || offset+32 > len(data) {
+		return 0, fmt.Errorf("insufficient data")
 	}
 
-	stringBytes := data[stringOffset+32 : stringOffset+32+length]
-	return string(stringBytes), offset + 32, nil
+	word := data[offset : offset+32]
+	for _, b := range word[:24] {
+		if b != 0 {
+			return 0, fmt.Errorf("value too large")
+		}
+	}
+
+	value := binary.BigEndian.Uint64(word[24:])
+	if limit < 0 || value > uint64(limit) {
+		return 0, fmt.Errorf("value %d out of bounds", value)
+	}
+	return int(value), nil
 }
 
 func ParseABISignature(signature string) (*ABIFunction, error) {
-	re := regexp.MustCompile(`^(\w+)\((.*)\)$`)
-	matches := re.FindStringSubmatch(signature)
+	matches := abiSignatureRegexp.FindStringSubmatch(signature)
 	if len(matches) != 3 {
 		return nil, fmt.Errorf("invalid function signature format")
 	}
@@ -368,11 +404,12 @@ func ParseABISignature(signature string) (*ABIFunction, error) {
 	var params []ABIParam
 	if paramStr != "" {
 		paramTypes := strings.Split(paramStr, ",")
+		params = make([]ABIParam, len(paramTypes))
 		for i, paramType := range paramTypes {
-			params = append(params, ABIParam{
-				Name: fmt.Sprintf("param%d", i),
+			params[i] = ABIParam{
+				Name: "param" + strconv.Itoa(i),
 				Type: strings.TrimSpace(paramType),
-			})
+			}
 		}
 	}
 
@@ -380,4 +417,59 @@ func ParseABISignature(signature string) (*ABIFunction, error) {
 		Name:   funcName,
 		Inputs: params,
 	}, nil
+}
+
+// parseAddress validates a 0x-prefixed 20-byte hex address and decodes it.
+func parseAddress(address string) ([20]byte, bool) {
+	var result [20]byte
+	if len(address) != 42 || !strings.HasPrefix(address, "0x") {
+		return result, false
+	}
+	if _, err := hex.Decode(result[:], []byte(address[2:])); err != nil {
+		return result, false
+	}
+	return result, true
+}
+
+func mustSelector(selectorHex string) [4]byte {
+	var selector [4]byte
+	if n, err := hex.Decode(selector[:], []byte(selectorHex)); err != nil || n != 4 {
+		panic("invalid selector: " + selectorHex)
+	}
+	return selector
+}
+
+// newCallData allocates calldata for a selector followed by the given number
+// of 32-byte words.
+func newCallData(selector [4]byte, words int) []byte {
+	data := make([]byte, 4+32*words)
+	copy(data, selector[:])
+	return data
+}
+
+// word returns the i-th 32-byte argument word of calldata.
+func word(callData []byte, i int) []byte {
+	return callData[4+32*i : 4+32*(i+1)]
+}
+
+func putAddress(dst []byte, address [20]byte) {
+	copy(dst[12:32], address[:])
+}
+
+func putUint64(dst []byte, n uint64) {
+	binary.BigEndian.PutUint64(dst[24:32], n)
+}
+
+func putUint256(dst []byte, n *big.Int) error {
+	if n == nil {
+		return fmt.Errorf("nil integer value")
+	}
+	if n.Sign() < 0 {
+		return fmt.Errorf("negative value for unsigned integer")
+	}
+	if n.BitLen() > 256 {
+		return fmt.Errorf("value exceeds uint256")
+	}
+	n.FillBytes(dst[:32])
+	return nil
 }

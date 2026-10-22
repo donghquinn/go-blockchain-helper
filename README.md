@@ -145,14 +145,14 @@ func main() {
 
     // Encode transfer function call
     from := "0x742d35Cc6634C0532925a3b8D82C28d53e01BCf2"
-    to := "0x8ba1f109551bD432803012645Hac136c63F5E5"
+    to := "0x8ba1f109551bD432803012645Ac136ddd64DBA72"
     tokenId := big.NewInt(1234)
     
     transferData, _ := nft.EncodeTransferFrom(from, to, tokenId)
     fmt.Printf("NFT transfer function call data: %x\n", transferData)
 
     // Encode approve function call
-    approved := "0x8ba1f109551bD432803012645Hac136c63F5E5"
+    approved := "0x8ba1f109551bD432803012645Ac136ddd64DBA72"
     approveData, _ := nft.EncodeApprove(approved, tokenId)
     fmt.Printf("NFT approve function call data: %x\n", approveData)
 
@@ -207,7 +207,7 @@ func main() {
         Topics: []string{
             web3.ERC20_TRANSFER_SIGNATURE,
             "0x000000000000000000000000742d35cc6634c0532925a3b8d82c28d53e01bcf2",
-            "0x0000000000000000000000008ba1f109551bd432803012645hac136c63f5e5",
+            "0x0000000000000000000000008ba1f109551bd432803012645ac136ddd64dba72",
         },
         Data:        "0x00000000000000000000000000000000000000000000000000000000000f4240",
         BlockNumber: big.NewInt(18500000),

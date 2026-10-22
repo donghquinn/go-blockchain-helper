@@ -1,10 +1,8 @@
 package web3
 
 import (
-	"encoding/hex"
 	"fmt"
 	"math/big"
-	"strings"
 )
 
 const (
@@ -17,6 +15,15 @@ const (
 	ERC20_NAME_SELECTOR          = "06fdde03"
 	ERC20_SYMBOL_SELECTOR        = "95d89b41"
 	ERC20_DECIMALS_SELECTOR      = "313ce567"
+)
+
+var (
+	erc20TransferSelector     = mustSelector(ERC20_TRANSFER_SELECTOR)
+	erc20TransferFromSelector = mustSelector(ERC20_TRANSFER_FROM_SELECTOR)
+	erc20ApproveSelector      = mustSelector(ERC20_APPROVE_SELECTOR)
+	erc20BalanceOfSelector    = mustSelector(ERC20_BALANCE_OF_SELECTOR)
+	erc20AllowanceSelector    = mustSelector(ERC20_ALLOWANCE_SELECTOR)
+	erc20TotalSupplySelector  = mustSelector(ERC20_TOTAL_SUPPLY_SELECTOR)
 )
 
 type ERC20Token struct {
@@ -36,130 +43,90 @@ func NewERC20Token(address, name, symbol string, decimals uint8) *ERC20Token {
 }
 
 func (token *ERC20Token) EncodeTransfer(to string, amount *big.Int) ([]byte, error) {
-	if !ValidateAddress(to) {
+	toAddress, ok := parseAddress(to)
+	if !ok {
 		return nil, fmt.Errorf("invalid recipient address")
 	}
 
-	selector, _ := hex.DecodeString(ERC20_TRANSFER_SELECTOR)
-
-	toAddress := strings.TrimPrefix(to, "0x")
-	toBytes, _ := hex.DecodeString(fmt.Sprintf("%064s", toAddress))
-
-	amountBytes := make([]byte, 32)
-	amount.FillBytes(amountBytes)
-
-	data := append(selector, toBytes...)
-	data = append(data, amountBytes...)
+	data := newCallData(erc20TransferSelector, 2)
+	putAddress(word(data, 0), toAddress)
+	if err := putUint256(word(data, 1), amount); err != nil {
+		return nil, fmt.Errorf("invalid amount: %w", err)
+	}
 
 	return data, nil
 }
 
 func (token *ERC20Token) EncodeTransferFrom(from, to string, amount *big.Int) ([]byte, error) {
-	if !ValidateAddress(from) {
+	fromAddress, ok := parseAddress(from)
+	if !ok {
 		return nil, fmt.Errorf("invalid sender address")
 	}
-	if !ValidateAddress(to) {
+	toAddress, ok := parseAddress(to)
+	if !ok {
 		return nil, fmt.Errorf("invalid recipient address")
 	}
 
-	selector, _ := hex.DecodeString(ERC20_TRANSFER_FROM_SELECTOR)
-
-	fromAddress := strings.TrimPrefix(from, "0x")
-	fromBytes, _ := hex.DecodeString(fmt.Sprintf("%064s", fromAddress))
-
-	toAddress := strings.TrimPrefix(to, "0x")
-	toBytes, _ := hex.DecodeString(fmt.Sprintf("%064s", toAddress))
-
-	amountBytes := make([]byte, 32)
-	amount.FillBytes(amountBytes)
-
-	data := append(selector, fromBytes...)
-	data = append(data, toBytes...)
-	data = append(data, amountBytes...)
+	data := newCallData(erc20TransferFromSelector, 3)
+	putAddress(word(data, 0), fromAddress)
+	putAddress(word(data, 1), toAddress)
+	if err := putUint256(word(data, 2), amount); err != nil {
+		return nil, fmt.Errorf("invalid amount: %w", err)
+	}
 
 	return data, nil
 }
 
 func (token *ERC20Token) EncodeApprove(spender string, amount *big.Int) ([]byte, error) {
-	if !ValidateAddress(spender) {
+	spenderAddress, ok := parseAddress(spender)
+	if !ok {
 		return nil, fmt.Errorf("invalid spender address")
 	}
 
-	selector, _ := hex.DecodeString(ERC20_APPROVE_SELECTOR)
-
-	spenderAddress := strings.TrimPrefix(spender, "0x")
-	spenderBytes, _ := hex.DecodeString(fmt.Sprintf("%064s", spenderAddress))
-
-	amountBytes := make([]byte, 32)
-	amount.FillBytes(amountBytes)
-
-	data := append(selector, spenderBytes...)
-	data = append(data, amountBytes...)
+	data := newCallData(erc20ApproveSelector, 2)
+	putAddress(word(data, 0), spenderAddress)
+	if err := putUint256(word(data, 1), amount); err != nil {
+		return nil, fmt.Errorf("invalid amount: %w", err)
+	}
 
 	return data, nil
 }
 
 func (token *ERC20Token) EncodeBalanceOf(owner string) ([]byte, error) {
-	if !ValidateAddress(owner) {
+	ownerAddress, ok := parseAddress(owner)
+	if !ok {
 		return nil, fmt.Errorf("invalid owner address")
 	}
 
-	selector, _ := hex.DecodeString(ERC20_BALANCE_OF_SELECTOR)
-
-	ownerAddress := strings.TrimPrefix(owner, "0x")
-	ownerBytes, _ := hex.DecodeString(fmt.Sprintf("%064s", ownerAddress))
-
-	data := append(selector, ownerBytes...)
+	data := newCallData(erc20BalanceOfSelector, 1)
+	putAddress(word(data, 0), ownerAddress)
 
 	return data, nil
 }
 
 func (token *ERC20Token) EncodeAllowance(owner, spender string) ([]byte, error) {
-	if !ValidateAddress(owner) {
+	ownerAddress, ok := parseAddress(owner)
+	if !ok {
 		return nil, fmt.Errorf("invalid owner address")
 	}
-	if !ValidateAddress(spender) {
+	spenderAddress, ok := parseAddress(spender)
+	if !ok {
 		return nil, fmt.Errorf("invalid spender address")
 	}
 
-	selector, _ := hex.DecodeString(ERC20_ALLOWANCE_SELECTOR)
-
-	ownerAddress := strings.TrimPrefix(owner, "0x")
-	ownerBytes, _ := hex.DecodeString(fmt.Sprintf("%064s", ownerAddress))
-
-	spenderAddress := strings.TrimPrefix(spender, "0x")
-	spenderBytes, _ := hex.DecodeString(fmt.Sprintf("%064s", spenderAddress))
-
-	data := append(selector, ownerBytes...)
-	data = append(data, spenderBytes...)
+	data := newCallData(erc20AllowanceSelector, 2)
+	putAddress(word(data, 0), ownerAddress)
+	putAddress(word(data, 1), spenderAddress)
 
 	return data, nil
 }
 
 func (token *ERC20Token) EncodeTotalSupply() ([]byte, error) {
-	selector, _ := hex.DecodeString(ERC20_TOTAL_SUPPLY_SELECTOR)
-	return selector, nil
+	return newCallData(erc20TotalSupplySelector, 0), nil
 }
 
 func (token *ERC20Token) DecodeTransferEvent(logData string, topics []string) (*TransferEvent, error) {
-	if len(topics) < 3 {
-		return nil, fmt.Errorf("insufficient topics for transfer event")
-	}
-
-	from := "0x" + topics[1][26:]
-	to := "0x" + topics[2][26:]
-
-	amount := new(big.Int)
-	if logData != "" && logData != "0x" {
-		amountHex := strings.TrimPrefix(logData, "0x")
-		amount.SetString(amountHex, 16)
-	}
-
-	return &TransferEvent{
-		From:   from,
-		To:     to,
-		Amount: amount,
-	}, nil
+	return parseTransferEvent(logData, topics)
 }
 
 func (token *ERC20Token) FormatAmount(amount *big.Int) string {

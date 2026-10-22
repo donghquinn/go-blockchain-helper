@@ -3,7 +3,6 @@ package web3
 import (
 	"fmt"
 	"math/big"
-	"strconv"
 	"strings"
 )
 
@@ -11,6 +10,27 @@ const (
 	WeiPerEther = 1e18
 	WeiPerGwei  = 1e9
 )
+
+// maxCachedDecimals covers every decimals value that fits a uint256 amount.
+const maxCachedDecimals = 77
+
+var pow10Cache = func() [maxCachedDecimals + 1]*big.Int {
+	var cache [maxCachedDecimals + 1]*big.Int
+	ten := big.NewInt(10)
+	cache[0] = big.NewInt(1)
+	for i := 1; i <= maxCachedDecimals; i++ {
+		cache[i] = new(big.Int).Mul(cache[i-1], ten)
+	}
+	return cache
+}()
+
+// pow10 returns 10^n. Cached values are shared and must not be modified.
+func pow10(n int) *big.Int {
+	if n <= maxCachedDecimals {
+		return pow10Cache[n]
+	}
+	return new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(n)), nil)
+}
 
 func WeiToEther(wei *big.Int) *big.Float {
 	ether := new(big.Float).SetInt(wei)
@@ -36,48 +56,48 @@ func GweiToWei(gwei float64) *big.Int {
 	return result
 }
 
+// ParseEther parses a decimal ether amount (e.g. "1.5") into wei exactly.
 func ParseEther(etherStr string) (*big.Int, error) {
-	ether, err := strconv.ParseFloat(etherStr, 64)
+	wei, err := ParseUnits(etherStr, 18)
 	if err != nil {
 		return nil, fmt.Errorf("invalid ether amount: %w", err)
 	}
-	return EtherToWei(ether), nil
+	return wei, nil
 }
 
 func FormatEther(wei *big.Int, decimals int) string {
-	ether := WeiToEther(wei)
-	format := fmt.Sprintf("%%.%df", decimals)
-	return fmt.Sprintf(format, ether)
+	return WeiToEther(wei).Text('f', decimals)
 }
 
 func FormatGwei(wei *big.Int, decimals int) string {
-	gwei := WeiToGwei(wei)
-	format := fmt.Sprintf("%%.%df", decimals)
-	return fmt.Sprintf(format, gwei)
+	return WeiToGwei(wei).Text('f', decimals)
 }
 
+// ParseUnits parses a decimal string into an integer scaled by 10^decimals.
+// Fractional digits beyond decimals are truncated.
 func ParseUnits(amount string, decimals int) (*big.Int, error) {
-	parts := strings.Split(amount, ".")
-	if len(parts) > 2 {
-		return nil, fmt.Errorf("invalid amount format")
+	if decimals < 0 {
+		return nil, fmt.Errorf("decimals must be non-negative")
 	}
 
-	integerPart := parts[0]
-	fractionalPart := ""
-	if len(parts) == 2 {
-		fractionalPart = parts[1]
+	integerPart, fractionalPart, _ := strings.Cut(amount, ".")
+	if strings.Contains(fractionalPart, ".") {
+		return nil, fmt.Errorf("invalid amount format")
 	}
 
 	if len(fractionalPart) > decimals {
 		fractionalPart = fractionalPart[:decimals]
 	}
 
-	for len(fractionalPart) < decimals {
-		fractionalPart += "0"
+	var sb strings.Builder
+	sb.Grow(len(integerPart) + decimals)
+	sb.WriteString(integerPart)
+	sb.WriteString(fractionalPart)
+	for i := len(fractionalPart); i < decimals; i++ {
+		sb.WriteByte('0')
 	}
 
-	fullAmount := integerPart + fractionalPart
-	result, ok := new(big.Int).SetString(fullAmount, 10)
+	result, ok := new(big.Int).SetString(sb.String(), 10)
 	if !ok {
 		return nil, fmt.Errorf("failed to parse amount")
 	}
@@ -85,25 +105,29 @@ func ParseUnits(amount string, decimals int) (*big.Int, error) {
 	return result, nil
 }
 
+// FormatUnits formats an integer amount scaled by 10^decimals as a decimal
+// string, trimming trailing fractional zeros.
 func FormatUnits(amount *big.Int, decimals int) string {
-	divisor := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(decimals)), nil)
+	if decimals <= 0 {
+		return amount.String()
+	}
 
-	integerPart := new(big.Int).Div(amount, divisor)
-	remainder := new(big.Int).Mod(amount, divisor)
+	integerPart, remainder := new(big.Int).QuoRem(amount, pow10(decimals), new(big.Int))
 
-	if remainder.Cmp(big.NewInt(0)) == 0 {
-		return integerPart.String()
+	sign := ""
+	if amount.Sign() < 0 {
+		sign = "-"
+		integerPart.Abs(integerPart)
+		remainder.Abs(remainder)
+	}
+
+	if remainder.Sign() == 0 {
+		return sign + integerPart.String()
 	}
 
 	fractionalStr := remainder.String()
-	for len(fractionalStr) < decimals {
-		fractionalStr = "0" + fractionalStr
-	}
-
+	fractionalStr = strings.Repeat("0", decimals-len(fractionalStr)) + fractionalStr
 	fractionalStr = strings.TrimRight(fractionalStr, "0")
-	if fractionalStr == "" {
-		return integerPart.String()
-	}
 
-	return integerPart.String() + "." + fractionalStr
+	return sign + integerPart.String() + "." + fractionalStr
 }
